@@ -60,11 +60,17 @@ class TestHTLCManager(unittest.TestCase):
         self.assertEqual(A.htlcs_by_direction(REMOTE, RECEIVED), [H('A', 0)])
         self.assertNotEqual(A.current_htlcs(LOCAL), [])
         self.assertNotEqual(B.current_htlcs(REMOTE), [])
+
         self.assertEqual(A.pending_htlcs(LOCAL), [])
+        self.assertEqual(A.pending_htlcs(REMOTE), A.current_htlcs(REMOTE))
+        self.assertNotEqual(A.pending_htlcs(REMOTE), [])
+
         self.assertEqual(B.pending_htlcs(REMOTE), [])
         B.send_ctx()
         A.recv_ctx()
-        A.send_rev()
+        A.send_rev() # here pending_htlcs(REMOTE) should become empty
+        self.assertEqual(A.pending_htlcs(REMOTE), [])
+
         B.recv_rev()
         A.send_ctx()
         B.recv_ctx()

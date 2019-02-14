@@ -15,17 +15,18 @@ class HTLCManager:
                 log[sub]['adds'] = {int(x): UpdateAddHtlc(*y) for x, y in log[sub]['adds'].items()}
                 coerceHtlcOwner2IntMap = lambda x: {HTLCOwner(int(y)): z for y, z in x.items()}
                 log[sub]['locked_in'] = {int(x): coerceHtlcOwner2IntMap(y) for x, y in log[sub]['locked_in'].items()}
-                log[sub]['settles'] = {int(x): y for x, y in log[sub]['settles'].items()}
+                log[sub]['settles'] = {int(x): coerceHtlcOwner2IntMap(y) for x, y in log[sub]['settles'].items()}
                 log[sub]['fails'] = {int(x): y for x, y in log[sub]['fails'].items()}
         self.log = log
 
     def to_save(self):
         x = deepcopy(self.log)
         for sub in (LOCAL, REMOTE):
-            d = {}
-            for htlc_id, htlc in x[sub]['adds'].items():
-                d[htlc_id] = (htlc[0], bh2u(htlc[1])) + htlc[2:]
-            x[sub]['adds'] = d
+            for name in ['adds', 'settles']:
+                d = {}
+                for htlc_id, htlc in x[sub][name].items():
+                    d[htlc_id] = (htlc[0], bh2u(htlc[1])) + htlc[2:]
+                x[sub][name] = d
         return x
 
     def send_htlc(self, htlc):
@@ -66,6 +67,9 @@ class HTLCManager:
 
     def send_rev(self):
         self.log[LOCAL]['ctn'] += 1
+        for htlc_id, ctnheights in self.log[LOCAL]['settles'].items():
+            if ctnheights[REMOTE] is None:
+                ctnheights[REMOTE] = ctnheights[LOCAL]
 
     def recv_rev(self):
         self.log[REMOTE]['ctn'] += 1
@@ -74,6 +78,9 @@ class HTLCManager:
             if ctnheights[LOCAL] is None:
                 did_set_htlc_height = True
                 assert ctnheights[REMOTE] == self.log[REMOTE]['ctn']
+                ctnheights[LOCAL] = ctnheights[REMOTE]
+        for htlc_id, ctnheights in self.log[REMOTE]['settles'].items():
+            if ctnheights[LOCAL] is None:
                 ctnheights[LOCAL] = ctnheights[REMOTE]
         return did_set_htlc_height
 
@@ -100,7 +107,7 @@ class HTLCManager:
                 include = htlc_height <= ctn
             if include:
                 settles = self.log[party]['settles']
-                if htlc_id not in settles or settles[htlc_id] > ctn:
+                if htlc_id not in settles or settles[htlc_id][subject] is None or settles[htlc_id][subject] > ctn:
                     fails = self.log[party]['fails']
                     if htlc_id not in fails or fails[htlc_id] > ctn:
                         l.append(self.log[party]['adds'][htlc_id])
@@ -126,16 +133,20 @@ class HTLCManager:
         return self.htlcs(subject, ctn)
 
     def send_settle(self, htlc_id):
-        self.log[REMOTE]['settles'][htlc_id] = self.log[REMOTE]['ctn'] + 1
+        self.log[REMOTE]['settles'][htlc_id] = {LOCAL: None, REMOTE: self.log[REMOTE]['ctn'] + 1}
 
     def recv_settle(self, htlc_id):
-        self.log[LOCAL]['settles'][htlc_id] = self.log[LOCAL]['ctn'] + 1
+        self.log[LOCAL]['settles'][htlc_id] = {LOCAL: self.log[LOCAL]['ctn'] + 1, REMOTE: None}
 
     def settled_htlcs_by(self, subject, ctn=None):
         assert type(subject) is HTLCOwner
         if ctn is None:
             ctn = self.log[subject]['ctn']
-        return [self.log[subject]['adds'][htlc_id] for htlc_id, height in self.log[subject]['settles'].items() if height <= ctn]
+        d = []
+        for htlc_id, ctnheights in self.log[subject]['settles'].items():
+            if ctnheights[subject] <= ctn:
+                d.append(self.log[subject]['adds'][htlc_id])
+        return d
 
     def settled_htlcs(self, subject, ctn=None):
         assert type(subject) is HTLCOwner
@@ -147,10 +158,10 @@ class HTLCManager:
         return sent + received
 
     def received_in_ctn(self, ctn):
-        return [self.log[REMOTE]['adds'][htlc_id] for htlc_id, height in self.log[REMOTE]['settles'].items() if height == ctn]
+        return [self.log[REMOTE]['adds'][htlc_id] for htlc_id, ctnheights in self.log[REMOTE]['settles'].items() if ctnheights[LOCAL] == ctn]
 
     def sent_in_ctn(self, ctn):
-        return [self.log[LOCAL]['adds'][htlc_id] for htlc_id, height in self.log[LOCAL]['settles'].items() if height == ctn]
+        return [self.log[LOCAL]['adds'][htlc_id] for htlc_id, ctnheights in self.log[LOCAL]['settles'].items() if ctnheights[LOCAL] == ctn]
 
     def send_fail(self, htlc_id):
         self.log[REMOTE]['fails'][htlc_id] = self.log[REMOTE]['ctn'] + 1
